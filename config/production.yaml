@@ -1,0 +1,12 @@
+app:
+  env: production
+
+browser:
+  headless: true
+
+logging:
+  level: warn
+  pretty: false
+
+server:
+  host: 0.0.0.0

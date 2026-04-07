@@ -1,0 +1,9 @@
+app:
+  env: development
+
+browser:
+  headless: false
+
+logging:
+  level: debug
+  pretty: true

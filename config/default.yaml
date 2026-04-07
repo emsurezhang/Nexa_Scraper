@@ -1,0 +1,64 @@
+app:
+  name: nexa-scraper
+  version: "1.0.0"
+  env: development
+
+browser:
+  headless: true
+  locale: zh-CN
+  timezone: Asia/Shanghai
+  userAgent: null
+  viewportWidth: 1280
+  viewportHeight: 800
+  stealth:
+    enabled: true
+    injectCanvas: true
+    injectWebGL: true
+
+pool:
+  minSize: 1
+  maxSize: 5
+  idleTimeoutMs: 300000
+  healthCheckIntervalMs: 30000
+  maxContextLifetimeMs: 180000
+
+queue:
+  concurrency: 3
+  retryMax: 3
+  retryBaseDelayMs: 1000
+  retryMaxDelayMs: 30000
+
+server:
+  host: 127.0.0.1
+  port: 3000
+  auth:
+    enabled: true
+    token: ""
+  rateLimit:
+    max: 100
+    windowMs: 60000
+
+storage:
+  dataDir: ./data
+  logsDir: ./logs
+  tmpDir: ./tmp
+  debugDir: ./debug
+  debugTtlDays: 7
+  tmpTtlHours: 24
+
+fetch:
+  defaultTimeout: 30000
+  defaultScreenshot: none
+  defaultFormat: raw
+  defaultLimit: 100
+
+media:
+  segmentDurationSec: 600
+  keepIntermediates: false
+  whisperModel: base
+  whisperModelDir: ./models
+  whisperLanguage: auto
+
+logging:
+  level: debug
+  pretty: true
