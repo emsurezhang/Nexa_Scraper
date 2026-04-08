@@ -229,7 +229,7 @@ async function fetchSingleUrl(
           pageWrapper,
           plugin,
           url,
-          extractedData.length,
+          extractedData as ListItem[],
           fetchOptions.minItems,
           logger,
         );
@@ -441,28 +441,53 @@ async function scrollForMore(
   pageWrapper: PageWrapper,
   plugin: NexaPlugin,
   url: string,
-  currentCount: number,
+  initialItems: ListItem[],
   minItems: number,
   log: ReturnType<typeof createLogger>,
 ): Promise<ListItem[]> {
   const maxScrolls = 500;
   const stableChecks = 5;
+  const collectInterval = 5; // 每滚动 N 次收集一次
   const hasPluginItemCount = typeof plugin.getListItemCount === 'function';
+  const hasExtractFromPage = typeof plugin.extractListFromPage === 'function';
+
+  // 使用 Map 按 id 去重，累积所有滚动过程中出现过的 item
+  const accumulated = new Map<string, ListItem>();
+
+  // 先把初始提取结果放入累积池
+  for (const item of initialItems) {
+    if (item.id) {
+      accumulated.set(item.id, item);
+    }
+  }
+
+  // 收集当前 DOM 中的 item 并合并到累积结果
+  const collectItems = async () => {
+    let items: ListItem[];
+    if (hasExtractFromPage) {
+      items = await plugin.extractListFromPage!(page, url);
+    } else {
+      const html = await pageWrapper.getHtml();
+      items = await plugin.extractList(html, url);
+    }
+    for (const item of items) {
+      if (item.id && !accumulated.has(item.id)) {
+        accumulated.set(item.id, item);
+      }
+    }
+  };
 
   let stableCount = 0;
   let lastHeight = await page.evaluate(() => document.documentElement.scrollHeight);
   let lastItemCount = hasPluginItemCount
     ? await plugin.getListItemCount!(page)
-    : currentCount;
+    : initialItems.length;
 
   for (let i = 0; i < maxScrolls; i++) {
-    // 已达到目标数量
-    if (hasPluginItemCount) {
-      const count = await plugin.getListItemCount!(page);
-      if (count >= minItems) {
-        log.info(`Reached ${count} items (target: ${minItems}), stopping scroll`);
-        break;
-      }
+    // 已达到目标数量（用累积数检查）
+    if (accumulated.size >= minItems) {
+      log.info(`Reached ${accumulated.size} accumulated items (target: ${minItems}), stopping scroll`);
+      break;
     }
 
     // 渐进式滚动：先滚一屏，再到底部
@@ -480,6 +505,11 @@ async function scrollForMore(
       ? await plugin.getListItemCount!(page)
       : 0;
 
+    // 定期收集 DOM 中的 item（虚拟滚动场景下旧节点会被回收）
+    if ((i + 1) % collectInterval === 0 || gotNew) {
+      await collectItems();
+    }
+
     if (!gotNew && currentHeight === lastHeight && currentItems === lastItemCount) {
       stableCount++;
       // 额外等待让渲染完成后再判断
@@ -495,8 +525,10 @@ async function scrollForMore(
         continue;
       }
       if (stableCount >= stableChecks) {
+        // 最后再收集一次
+        await collectItems();
         log.info(
-          `No more content after ${stableCount} checks (items=${currentItems}, height=${currentHeight})`,
+          `No more content after ${stableCount} checks (accumulated=${accumulated.size}, dom=${currentItems}, height=${currentHeight})`,
         );
         break;
       }
@@ -508,16 +540,14 @@ async function scrollForMore(
     lastItemCount = currentItems;
 
     if ((i + 1) % 10 === 0) {
-      log.info(`Scrolled ${i + 1} times, items=${currentItems}, height=${currentHeight}`);
+      log.info(`Scrolled ${i + 1} times, accumulated=${accumulated.size}, dom=${currentItems}, height=${currentHeight}`);
     }
   }
 
-  // 从活跃 DOM 提取（优先）或重新获取 HTML 提取
-  if (typeof plugin.extractListFromPage === 'function') {
-    return plugin.extractListFromPage(page, url);
-  }
-  const latestHtml = await pageWrapper.getHtml();
-  return plugin.extractList(latestHtml, url);
+  // 最终收集一次确保不遗漏
+  await collectItems();
+
+  return Array.from(accumulated.values());
 }
 
 /**

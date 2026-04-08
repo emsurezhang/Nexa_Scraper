@@ -80,7 +80,8 @@ export default class DouyinPlugin implements NexaPlugin {
         const videoId = m[1];
         if (seen.has(videoId)) return;
         seen.add(videoId);
-        const title = (el.querySelector('.title, [class*="title"], [class*="desc"]') as HTMLElement)?.textContent?.trim() || undefined;
+        const title = (el.querySelector('.title, [class*="title"], [class*="desc"]') as HTMLElement)?.textContent?.trim() || '';
+        if (!title) return;
         const fullUrl = href.startsWith('http') ? href : `https://www.douyin.com${href}`;
         items.push({ id: videoId, url: fullUrl, title });
       });

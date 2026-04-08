@@ -233,10 +233,13 @@ function awemeToListItem(aweme: DouyinVideoItem): ListItem | null {
   const id = aweme.awemeId;
   if (!id) return null;
 
+  const desc = (aweme.desc ?? '').trim();
+  if (!desc) return null;
+
   return {
     id,
     url: `https://www.douyin.com/video/${id}`,
-    title: (aweme.desc ?? '').slice(0, 140) || '(无描述)',
+    title: desc.slice(0, 140),
     meta: {
       author: aweme.author?.nickname,
       createdAt: aweme.createTime
@@ -310,10 +313,13 @@ function extractVideoListFromDom(html: string): ListItem[] {
     const lastP = $el.find('p').last().text().trim();
     const title = imgAlt || lastP || $el.attr('title') || '';
 
+    const trimmedTitle = title.slice(0, 140);
+    if (!trimmedTitle) return;
+
     items.push({
       id: videoId,
       url: `https://www.douyin.com/video/${videoId}`,
-      title: title.slice(0, 140) || '(无描述)',
+      title: trimmedTitle,
     });
   });
 
