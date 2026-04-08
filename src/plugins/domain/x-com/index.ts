@@ -56,4 +56,32 @@ export default class XComPlugin implements NexaPlugin {
   async checkLoginState(page: Page): Promise<LoginState> {
     return checkLoginState(page);
   }
+
+  async getListItemCount(page: Page): Promise<number> {
+    return page.evaluate(() =>
+      document.querySelectorAll('article[data-testid="tweet"]').length,
+    );
+  }
+
+  async extractListFromPage(page: Page, _url: string): Promise<ListItem[]> {
+    return page.evaluate(() => {
+      const items: { id: string; url: string; title?: string }[] = [];
+      const seen = new Set<string>();
+      document.querySelectorAll('article[data-testid="tweet"]').forEach((el) => {
+        const links = el.querySelectorAll('a[href*="/status/"]');
+        let tweetUrl = '';
+        let postId = '';
+        for (const a of links) {
+          const href = (a as HTMLAnchorElement).getAttribute('href') ?? '';
+          const m = /\/status\/(\d+)/.exec(href);
+          if (m) { postId = m[1]; tweetUrl = href.startsWith('http') ? href : `https://x.com${href}`; break; }
+        }
+        if (!postId || seen.has(postId)) return;
+        seen.add(postId);
+        const text = (el.querySelector('[data-testid="tweetText"]') as HTMLElement)?.textContent?.trim() || '';
+        items.push({ id: postId, url: tweetUrl, title: text.slice(0, 200) || undefined });
+      });
+      return items;
+    });
+  }
 }

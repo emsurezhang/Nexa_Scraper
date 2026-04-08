@@ -10,11 +10,12 @@ import { v4 as uuidv4 } from 'uuid';
 import dayjs from 'dayjs';
 import { createLogger } from '../../core/logger.js';
 import { pluginRegistry } from '../../core/plugin-registry.js';
-import { browserManager, createPage } from '../../core/capabilities/browser.js';
+import { browserManager, createPage, PageWrapper } from '../../core/capabilities/browser.js';
 import { injectStealth } from '../../core/capabilities/stealth.js';
 import { loadCookies } from '../../core/capabilities/cookie-manager.js';
 import { jobOperations, resultOperations } from '../../core/db.js';
-import type { FetchOptions, SingleItem, ListItem } from '../../core/plugin-contract.js';
+import type { FetchOptions, SingleItem, ListItem, NexaPlugin } from '../../core/plugin-contract.js';
+import type { Page } from 'playwright';
 import config from '../../core/config.js';
 
 const logger = createLogger({ module: 'cli:fetch' });
@@ -30,6 +31,7 @@ export function registerFetchCommand(program: Command): void {
     .option('--format <mode>', '输出格式：raw|delta|full', config.fetch.defaultFormat)
     .option('--proxy <url>', '代理地址')
     .option('--limit <n>', '列表页最大提取条数', String(config.fetch.defaultLimit))
+    .option('--min <n>', '列表页最小提取条数（不足则滚动加载更多）')
     .option('--headless <bool>', '是否无头（默认 true，--debug 时默认 false）')
     .option('--plugin <name>', '强制指定插件')
     .option('--batch <file>', '批量抓取，每行一个 URL')
@@ -83,6 +85,7 @@ async function fetchSingleUrl(
   const fetchOptions: FetchOptions = {
     format: options.format as FetchOptions['format'],
     limit: parseInt(options.limit as string),
+    minItems: options.min ? parseInt(options.min as string) : undefined,
     debug: isDebug,
     debugDir: options.debugDir as string | undefined,
     screenshot: options.screenshot as FetchOptions['screenshot'],
@@ -211,6 +214,27 @@ async function fetchSingleUrl(
     
     if (pageType === 'list') {
       extractedData = await plugin.extractList(html, url);
+
+      // --min: 如果提取数量不足，滚动加载更多内容
+      if (
+        fetchOptions.minItems &&
+        Array.isArray(extractedData) &&
+        extractedData.length < fetchOptions.minItems
+      ) {
+        logger.info(
+          `Got ${extractedData.length} items, need at least ${fetchOptions.minItems}, scrolling for more...`,
+        );
+        extractedData = await scrollForMore(
+          page,
+          pageWrapper,
+          plugin,
+          url,
+          extractedData.length,
+          fetchOptions.minItems,
+          logger,
+        );
+      }
+
       // 应用 limit
       if (Array.isArray(extractedData) && fetchOptions.limit) {
         extractedData = extractedData.slice(0, fetchOptions.limit);
@@ -408,3 +432,124 @@ async function handleBatchFetch(options: Record<string, string | boolean>): Prom
 }
 
 export default registerFetchCommand;
+
+/**
+ * 滚动页面加载更多列表内容，直到达到 minItems 或无更多内容
+ */
+async function scrollForMore(
+  page: Page,
+  pageWrapper: PageWrapper,
+  plugin: NexaPlugin,
+  url: string,
+  currentCount: number,
+  minItems: number,
+  log: ReturnType<typeof createLogger>,
+): Promise<ListItem[]> {
+  const maxScrolls = 500;
+  const stableChecks = 5;
+  const hasPluginItemCount = typeof plugin.getListItemCount === 'function';
+
+  let stableCount = 0;
+  let lastHeight = await page.evaluate(() => document.documentElement.scrollHeight);
+  let lastItemCount = hasPluginItemCount
+    ? await plugin.getListItemCount!(page)
+    : currentCount;
+
+  for (let i = 0; i < maxScrolls; i++) {
+    // 已达到目标数量
+    if (hasPluginItemCount) {
+      const count = await plugin.getListItemCount!(page);
+      if (count >= minItems) {
+        log.info(`Reached ${count} items (target: ${minItems}), stopping scroll`);
+        break;
+      }
+    }
+
+    // 渐进式滚动：先滚一屏，再到底部
+    await page.evaluate(() => window.scrollBy(0, window.innerHeight));
+    await page.waitForTimeout(1500);
+    await page.evaluate(() =>
+      window.scrollTo(0, document.documentElement.scrollHeight),
+    );
+
+    // 轮询等待新内容
+    const gotNew = await waitForNewContent(page, plugin, lastItemCount, lastHeight);
+
+    const currentHeight = await page.evaluate(() => document.documentElement.scrollHeight);
+    const currentItems = hasPluginItemCount
+      ? await plugin.getListItemCount!(page)
+      : 0;
+
+    if (!gotNew && currentHeight === lastHeight && currentItems === lastItemCount) {
+      stableCount++;
+      // 额外等待让渲染完成后再判断
+      await page.waitForTimeout(3000);
+      const recheckHeight = await page.evaluate(() => document.documentElement.scrollHeight);
+      const recheckItems = hasPluginItemCount
+        ? await plugin.getListItemCount!(page)
+        : 0;
+      if (recheckHeight !== currentHeight || recheckItems !== currentItems) {
+        stableCount = 0;
+        lastHeight = recheckHeight;
+        lastItemCount = recheckItems;
+        continue;
+      }
+      if (stableCount >= stableChecks) {
+        log.info(
+          `No more content after ${stableCount} checks (items=${currentItems}, height=${currentHeight})`,
+        );
+        break;
+      }
+    } else {
+      stableCount = 0;
+    }
+
+    lastHeight = currentHeight;
+    lastItemCount = currentItems;
+
+    if ((i + 1) % 10 === 0) {
+      log.info(`Scrolled ${i + 1} times, items=${currentItems}, height=${currentHeight}`);
+    }
+  }
+
+  // 从活跃 DOM 提取（优先）或重新获取 HTML 提取
+  if (typeof plugin.extractListFromPage === 'function') {
+    return plugin.extractListFromPage(page, url);
+  }
+  const latestHtml = await pageWrapper.getHtml();
+  return plugin.extractList(latestHtml, url);
+}
+
+/**
+ * 轮询等待新内容加载（不使用 waitForLoadState 避免 SPA 路由重置）
+ */
+async function waitForNewContent(
+  page: Page,
+  plugin: NexaPlugin,
+  prevItemCount: number,
+  prevHeight: number,
+): Promise<boolean> {
+  const hasPluginItemCount = typeof plugin.getListItemCount === 'function';
+  const pollInterval = 500;
+  const maxWait = 8000;
+  let elapsed = 0;
+
+  // 先等一会让请求发出
+  await page.waitForTimeout(800);
+  elapsed += 800;
+
+  while (elapsed < maxWait) {
+    const h = await page.evaluate(() => document.documentElement.scrollHeight);
+    if (h !== prevHeight) return true;
+
+    if (hasPluginItemCount) {
+      const c = await plugin.getListItemCount!(page);
+      if (c !== prevItemCount) return true;
+    }
+
+    await page.waitForTimeout(pollInterval);
+    elapsed += pollInterval;
+  }
+
+  return false;
+}

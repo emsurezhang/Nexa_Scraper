@@ -76,6 +76,46 @@ export default class YouTubePlugin implements NexaPlugin {
     return checkLoginState(page);
   }
 
+  async getListItemCount(page: Page): Promise<number> {
+    return page.evaluate(() =>
+      document.querySelectorAll('ytd-rich-item-renderer, ytd-grid-video-renderer').length,
+    );
+  }
+
+  async extractListFromPage(page: Page, _url: string): Promise<ListItem[]> {
+    return page.evaluate(() => {
+      const items: { id: string; url: string; title: string; meta: Record<string, string | undefined> }[] = [];
+      const seen = new Set<string>();
+      document.querySelectorAll('ytd-rich-item-renderer, ytd-grid-video-renderer').forEach((el) => {
+        const titleLink = el.querySelector('a#video-title-link, a#video-title') as HTMLAnchorElement | null;
+        const anyLink = el.querySelector('a[href*="watch?v="]') as HTMLAnchorElement | null;
+        const link = titleLink || anyLink;
+        if (!link) return;
+        const href = link.getAttribute('href') ?? '';
+        const m = /[?&]v=([a-zA-Z0-9_-]{11})/.exec(href);
+        if (!m) return;
+        const videoId = m[1];
+        if (seen.has(videoId)) return;
+        seen.add(videoId);
+        const title = titleLink?.getAttribute('title')
+          || el.querySelector('yt-formatted-string#video-title')?.textContent?.trim()
+          || '';
+        const metaEl = el.querySelector('#metadata-line');
+        const spans = metaEl ? metaEl.querySelectorAll('span') : [];
+        const viewCount = spans[0]?.textContent?.trim();
+        const publishedTime = spans[1]?.textContent?.trim();
+        const durationEl = el.querySelector(
+          'badge-shape .badge-shape-wiz__text, ytd-thumbnail-overlay-time-status-renderer #text, span.ytd-thumbnail-overlay-time-status-renderer',
+        );
+        const duration = durationEl?.textContent?.trim();
+        const thumbEl = el.querySelector('img#img, yt-image img') as HTMLImageElement | null;
+        const thumbnail = thumbEl?.src || undefined;
+        items.push({ id: videoId, url: `https://www.youtube.com/watch?v=${videoId}`, title, meta: { viewCount, publishedTime, duration, thumbnail } });
+      });
+      return items;
+    });
+  }
+
   /* ---- Media fetch (legacy — returns stream URL) ------------------- */
 
   async fetchMedia(page: Page, _url: string): Promise<MediaInfo> {

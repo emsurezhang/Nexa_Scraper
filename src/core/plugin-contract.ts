@@ -52,6 +52,7 @@ export interface MediaInfo {
 export interface FetchOptions {
   format?: 'raw' | 'delta' | 'full';
   limit?: number;
+  minItems?: number;
   debug?: boolean;
   debugDir?: string;
   screenshot?: 'none' | 'viewport' | 'full';
@@ -96,6 +97,12 @@ export interface NexaPlugin {
 
   /** 媒体文件抓取（可选，适用于视频网站） */
   fetchMedia?(page: Page, url: string): Promise<MediaInfo>;
+
+  /** 获取当前页面列表项数量（可选，用于滚动加载检测） */
+  getListItemCount?(page: Page): Promise<number>;
+
+  /** 从活跃页面直接提取列表数据（可选，SPA 滚动加载后使用） */
+  extractListFromPage?(page: Page, url: string): Promise<ListItem[]>;
 }
 
 /** 通用插件接口（兜底解析） */
