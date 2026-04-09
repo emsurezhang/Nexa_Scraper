@@ -30,7 +30,7 @@ export function registerFetchCommand(program: Command): void {
     .option('--output-json <path>', '结果输出到文件')
     .option('--format <mode>', '输出格式：raw|delta|full', config.fetch.defaultFormat)
     .option('--proxy <url>', '代理地址')
-    .option('--limit <n>', '列表页最大提取条数', String(config.fetch.defaultLimit))
+    .option('--max <n>', '列表页最大提取条数', String(config.fetch.defaultLimit))
     .option('--min <n>', '列表页最小提取条数（不足则滚动加载更多）')
     .option('--headless <bool>', '是否无头（默认 true，--debug 时默认 false）')
     .option('--plugin <name>', '强制指定插件')
@@ -84,7 +84,7 @@ async function fetchSingleUrl(
 
   const fetchOptions: FetchOptions = {
     format: options.format as FetchOptions['format'],
-    limit: parseInt(options.limit as string),
+    limit: parseInt(options.max as string),
     minItems: options.min ? parseInt(options.min as string) : undefined,
     debug: isDebug,
     debugDir: options.debugDir as string | undefined,
