@@ -6,9 +6,10 @@
 import { pino, type Logger as PinoLogger, type Level } from 'pino';
 import { resolve } from 'path';
 import { existsSync, mkdirSync } from 'fs';
-import config from './config.js';
 
-const LOGS_DIR = resolve(process.cwd(), config.storage.logsDir);
+import config, { configRootDir } from './config.js';
+
+const LOGS_DIR = resolve(configRootDir, '..', config.storage.logsDir);
 
 // 确保日志目录存在
 if (!existsSync(LOGS_DIR)) {

@@ -3,13 +3,44 @@
  * 使用 node-config 进行分层配置管理
  */
 
+
 import { readFileSync, existsSync } from 'fs';
-import { resolve } from 'path';
+import { resolve, dirname, join } from 'path';
 import { parse } from 'yaml';
 import { config as dotenvConfig } from 'dotenv';
 
-// 加载 .env 文件
-dotenvConfig({ path: resolve(process.cwd(), 'config/.env') });
+// 查找配置文件（支持 --config/env/递归）
+function findConfigFile(): { file: string, dir: string } | null {
+  // 1. CLI 参数优先（通过 process.env.NEXA_CONFIG_PATH 注入）
+  if (process.env.NEXA_CONFIG_PATH && existsSync(process.env.NEXA_CONFIG_PATH)) {
+    return { file: process.env.NEXA_CONFIG_PATH, dir: dirname(process.env.NEXA_CONFIG_PATH) };
+  }
+  // 2. 环境变量
+  if (process.env.NEXA_CONFIG && existsSync(process.env.NEXA_CONFIG)) {
+    return { file: process.env.NEXA_CONFIG, dir: dirname(process.env.NEXA_CONFIG) };
+  }
+  // 3. 递归向上查找 config/default.yaml
+  let dir = process.cwd();
+  while (true) {
+    const candidate = join(dir, 'config', 'default.yaml');
+    if (existsSync(candidate)) {
+      return { file: candidate, dir: join(dir, 'config') };
+    }
+    const parent = dirname(dir);
+    if (parent === dir) break;
+    dir = parent;
+  }
+  return null;
+}
+
+const configFileInfo = findConfigFile();
+if (!configFileInfo) {
+  throw new Error('未找到配置文件 config/default.yaml，请用 --config 或 NEXA_CONFIG 指定，或在任意父目录下放置 config/default.yaml');
+}
+export const configRootDir = configFileInfo.dir;
+
+// 加载 .env 文件（与配置文件同目录）
+dotenvConfig({ path: resolve(configRootDir, '.env') });
 
 export interface BrowserConfig {
   headless: boolean;
@@ -100,12 +131,12 @@ export interface Config {
   logging: LoggingConfig;
 }
 
-const CONFIG_DIR = resolve(process.cwd(), 'config');
+
+const CONFIG_DIR = configRootDir;
 
 function loadYamlFile(filename: string): Record<string, unknown> | null {
   const path = resolve(CONFIG_DIR, filename);
   if (!existsSync(path)) return null;
-  
   try {
     const content = readFileSync(path, 'utf-8');
     return parse(content) as Record<string, unknown>;
@@ -170,5 +201,4 @@ function loadConfig(): Config {
 }
 
 export const config = loadConfig();
-
 export default config;

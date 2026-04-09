@@ -6,12 +6,12 @@
 import Database from 'better-sqlite3';
 import { resolve } from 'path';
 import { existsSync, mkdirSync } from 'fs';
-import config from './config.js';
+import config, { configRootDir } from './config.js';
 import { createLogger } from './logger.js';
 
 const logger = createLogger({ module: 'db' });
 
-const DATA_DIR = resolve(process.cwd(), config.storage.dataDir);
+const DATA_DIR = resolve(configRootDir, '..', config.storage.dataDir);
 const DB_PATH = resolve(DATA_DIR, 'nexa.db');
 
 // 确保数据目录存在

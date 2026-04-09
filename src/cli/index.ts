@@ -5,6 +5,12 @@
  */
 
 import { Command } from 'commander';
+// 提前处理 --config 参数，注入 NEXA_CONFIG_PATH 环境变量
+const configArgIdx = process.argv.findIndex(arg => arg === '--config' || arg === '-c');
+if (configArgIdx !== -1 && process.argv[configArgIdx + 1]) {
+  process.env.NEXA_CONFIG_PATH = process.argv[configArgIdx + 1];
+}
+
 import { createLogger, setGlobalVerbosity, reconfigureLogger } from '../core/logger.js';
 import config from '../core/config.js';
 import { runBootstrapChecks } from '../core/bootstrap.js';
