@@ -1,5 +1,9 @@
 #!/bin/bash
+
 # Nexa Scraper 环境设置脚本
+PROJECT_ROOT="$(cd "$(dirname "$0")/.." && pwd)"
+export NEXA_CONFIG="$PROJECT_ROOT/config/default.yaml"
+echo "NEXA_CONFIG set to $NEXA_CONFIG"
 
 set -e
 

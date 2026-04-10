@@ -4,14 +4,18 @@
  */
 
 import { readFileSync, writeFileSync, existsSync, mkdirSync } from 'fs';
-import { resolve } from 'path';
+import { resolve, dirname } from 'path';
+import { fileURLToPath } from 'url';
 import type { Cookie } from 'playwright';
 import { createLogger } from '../logger.js';
 import { cookieOperations } from '../db.js';
 
 const logger = createLogger({ module: 'cookie' });
 
-const COOKIES_DIR = resolve(process.cwd(), 'data/cookies');
+// 获取项目根目录（package.json 所在目录）
+const __dirname = dirname(fileURLToPath(import.meta.url));
+const PROJECT_ROOT = resolve(__dirname, '../../../');
+const COOKIES_DIR = resolve(PROJECT_ROOT, 'data/cookies');
 
 // 确保目录存在
 if (!existsSync(COOKIES_DIR)) {

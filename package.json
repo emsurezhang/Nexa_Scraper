@@ -1,6 +1,6 @@
 {
   "name": "nexa-scraper",
-  "version": "1.0.0",
+  "version": "3.1.0",
   "description": "基于 Playwright 的模块化、可扩展网页抓取框架",
   "main": "dist/index.js",
   "type": "module",
@@ -26,6 +26,7 @@
   "author": "",
   "license": "MIT",
   "dependencies": {
+    "fastify": "^4.26.0",
     "@fastify/cors": "^9.0.0",
     "@fastify/rate-limit": "^9.0.0",
     "@mozilla/readability": "^0.6.0",
@@ -36,7 +37,6 @@
     "config": "^3.3.11",
     "dayjs": "^1.11.10",
     "dotenv": "^16.4.0",
-    "fastify": "^4.26.0",
     "fs-extra": "^11.2.0",
     "jsdom": "^29.0.2",
     "mime-types": "^2.1.35",

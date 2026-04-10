@@ -4,7 +4,8 @@
  */
 
 import { readdirSync, existsSync } from 'fs';
-import { resolve, join } from 'path';
+import { resolve, join, dirname } from 'path';
+import { fileURLToPath } from 'url';
 import { createLogger } from './logger.js';
 import type { NexaPlugin, PluginMeta } from './plugin-contract.js';
 
@@ -15,17 +16,25 @@ export class PluginRegistry {
   private plugins = new Map<string, NexaPlugin>();
   private domainMappings = new Map<string, NexaPlugin[]>();
 
+  private getProjectRoot(): string {
+    // 获取项目根目录（package.json 所在目录）
+    // __dirname for CommonJS, fileURLToPath(import.meta.url) for ESM
+    const __dirname = dirname(fileURLToPath(import.meta.url));
+    // src/core/plugin-registry.ts → 项目根目录
+    return resolve(__dirname, '../../');
+  }
+
   private isDistRuntime(): boolean {
     // import.meta.url is a file URL; compiled entrypoints live under /dist/ while tsx/dev runs from /src/.
     return import.meta.url.includes('/dist/');
   }
 
   private getDomainPluginDirs(): string[] {
-    // Dist runtime only scans dist plugins; tsx/dev runtime only scans src plugins.
+    // 始终以项目根目录为基准，保证任意目录运行都能找到插件
+    const projectRoot = this.getProjectRoot();
     const candidates = this.isDistRuntime()
-      ? [resolve(process.cwd(), 'dist/plugins/domain')]
-      : [resolve(process.cwd(), 'src/plugins/domain')];
-
+      ? [resolve(projectRoot, 'dist/plugins/domain')]
+      : [resolve(projectRoot, 'src/plugins/domain')];
     return candidates.filter((dir) => existsSync(dir));
   }
 
