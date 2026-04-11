@@ -9,6 +9,8 @@ import rateLimit from '@fastify/rate-limit';
 import { createLogger } from '../core/logger.js';
 import { browserPool } from '../core/capabilities/browser-pool.js';
 import { taskQueue } from '../core/queue.js';
+import { pluginRegistry } from '../core/plugin-registry.js';
+import { executeFetchTask } from '../core/task-executor.js';
 import config from '../core/config.js';
 
 import { registerFetchRoutes } from './routes/fetch.js';
@@ -54,29 +56,20 @@ export async function startServer(options: ServerOptions = {}): Promise<void> {
   await registerPluginsRoutes(app);
   await registerHealthRoutes(app);
 
+  // 加载插件
+  await pluginRegistry.load();
+
   // 初始化浏览器资源池
   await browserPool.init();
 
   // 设置任务队列处理器
   taskQueue.setHandler(async (task) => {
-    // 这里应该调用抓取逻辑
-    // 简化实现，实际应该复用 cli/commands/fetch.ts 中的逻辑
     logger.info(`Processing task: ${task.id}`);
     
-    // 返回模拟结果
-    return {
-      id: task.id,
-      url: task.url,
-      data: {
-        id: 'mock',
-        url: task.url,
-        title: 'Mock Result',
-        content: 'This is a mock result from server mode',
-      },
-      fetchedAt: new Date().toISOString(),
-      plugin: 'general',
-      pageType: 'single' as const,
-    };
+    // 执行真实的抓取任务
+    return await executeFetchTask(task, {
+      debug: task.options.debug,
+    });
   });
 
   // 优雅关闭处理
