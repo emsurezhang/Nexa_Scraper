@@ -12,6 +12,7 @@
 import * as cheerio from 'cheerio';
 import type { ListItem, SingleItem, MediaInfo } from '../../../core/plugin-contract.js';
 import { extractVideoId, extractVideoIdFromPath } from './url-matcher.js';
+import { logger } from '../../../core/logger.js';
 
 /* ------------------------------------------------------------------ */
 /*  Types                                                              */
@@ -93,6 +94,7 @@ export async function extractList(html: string, _url: string): Promise<ListItem[
 
 /** 单视频页数据提取 */
 export async function extractSingle(html: string, url: string): Promise<SingleItem> {
+  logger.debug('Extracting single item...');
   const videoId = extractVideoId(url) ?? `yt_${Date.now()}`;
 
   // 从 ytInitialPlayerResponse / ytInitialData 提取
@@ -116,7 +118,7 @@ export async function extractSingle(html: string, url: string): Promise<SingleIt
     ogMeta(html, 'og:site_name') ??
     '';
 
-  const publishedAt = extractPublishDate(initialData);
+  const publishedAt = extractPublishDate(initialData, html);
 
   const durationSec = videoDetails?.lengthSeconds
     ? parseInt(videoDetails.lengthSeconds, 10)
@@ -423,6 +425,193 @@ function pickBestAudio(playerResponse: Record<string, unknown>): MediaInfo {
 }
 
 /* ================================================================== */
+/*  时间解析工具                                                        */
+/* ================================================================== */
+
+/**
+ * 解析中文日期格式为标准 ISO 格式
+ * 支持格式: "2026年4月13日", "2026/04/13", "2026-04-13", "Apr 13, 2026" 等
+ * 也支持相对时间: "2天前", "1周前" 等
+ */
+function parseChineseDate(dateText: string, referenceDate: Date = new Date()): string | undefined {
+  if (!dateText) return undefined;
+
+  const cleanText = dateText.trim();
+  if (!cleanText) return undefined;
+
+  // 解析中文日期格式: "2026年4月13日"
+  const chineseMatch = /(\d{4})年(\d{1,2})月(\d{1,2})日/.exec(cleanText);
+  if (chineseMatch) {
+    const [, year, month, day] = chineseMatch;
+    // Return as YYYY-MM-DD string
+    return `${year}-${String(month).padStart(2, '0')}-${String(day).padStart(2, '0')}`;
+  }
+
+  // 解析标准日期格式: "2026-04-13" 或 "2026/04/13"
+  const isoMatch = /(\d{4})[-\/](\d{1,2})[-\/](\d{1,2})/.exec(cleanText);
+  if (isoMatch) {
+    const [, year, month, day] = isoMatch;
+    return `${year}-${String(month).padStart(2, '0')}-${String(day).padStart(2, '0')}`;
+  }
+
+  // 解析英文日期格式: "Apr 13, 2026" 或 "April 13, 2026"
+  const englishMatch = /([A-Za-z]+)\s+(\d{1,2}),?\s+(\d{4})/.exec(cleanText);
+  if (englishMatch) {
+    const date = new Date(cleanText);
+    if (!isNaN(date.getTime())) {
+      return date.toISOString();
+    }
+  }
+
+  // 解析相对时间
+  const result = new Date(referenceDate);
+  let matched = false;
+
+  // 匹配 "X秒前" / "X seconds ago"
+  const secondsMatch = /(\d+)\s*秒前|(\d+)\s*seconds?\s+ago/i.exec(cleanText);
+  if (secondsMatch) {
+    const seconds = parseInt(secondsMatch[1] || secondsMatch[2]);
+    result.setSeconds(result.getSeconds() - seconds);
+    matched = true;
+  }
+
+  // 匹配 "X分钟前" / "X minutes ago"
+  const minutesMatch = /(\d+)\s*分钟前|(\d+)\s*minutes?\s+ago/i.exec(cleanText);
+  if (minutesMatch) {
+    const minutes = parseInt(minutesMatch[1] || minutesMatch[2]);
+    result.setMinutes(result.getMinutes() - minutes);
+    matched = true;
+  }
+
+  // 匹配 "X小时前" / "X hours ago" / "X钟头前"
+  const hoursMatch = /(\d+)\s*小时前|(\d+)\s*hours?\s+ago|(\d+)\s*钟头前/i.exec(cleanText);
+  if (hoursMatch) {
+    const hours = parseInt(hoursMatch[1] || hoursMatch[2] || hoursMatch[3]);
+    result.setHours(result.getHours() - hours);
+    matched = true;
+  }
+
+  // 匹配 "X天前" / "X days ago" / "X日前"
+  const daysMatch = /(\d+)\s*天前|(\d+)\s*days?\s+ago|(\d+)\s*日前/i.exec(cleanText);
+  if (daysMatch) {
+    const days = parseInt(daysMatch[1] || daysMatch[2] || daysMatch[3]);
+    result.setDate(result.getDate() - days);
+    matched = true;
+  }
+
+  // 匹配 "X周前" / "X weeks ago" / "X星期前" / "X礼拜前"
+  const weeksMatch = /(\d+)\s*周前|(\d+)\s*weeks?\s+ago|(\d+)\s*星期前|(\d+)\s*礼拜前/i.exec(cleanText);
+  if (weeksMatch) {
+    const weeks = parseInt(weeksMatch[1] || weeksMatch[2] || weeksMatch[3] || weeksMatch[4]);
+    result.setDate(result.getDate() - weeks * 7);
+    matched = true;
+  }
+
+  // 匹配 "X个月前" / "X months ago"
+  const monthsMatch = /(\d+)\s*个月前|(\d+)\s*months?\s+ago/i.exec(cleanText);
+  if (monthsMatch) {
+    const months = parseInt(monthsMatch[1] || monthsMatch[2]);
+    result.setMonth(result.getMonth() - months);
+    matched = true;
+  }
+
+  // 匹配 "X年前" / "X years ago"
+  const yearsMatch = /(\d+)\s*年前|(\d+)\s*years?\s+ago/i.exec(cleanText);
+  if (yearsMatch) {
+    const years = parseInt(yearsMatch[1] || yearsMatch[2]);
+    result.setFullYear(result.getFullYear() - years);
+    matched = true;
+  }
+
+  // 匹配 "昨天" / "yesterday"
+  if (/昨天|yesterday/i.test(cleanText)) {
+    result.setDate(result.getDate() - 1);
+    matched = true;
+  }
+
+  // 匹配 "前天" / "day before yesterday"
+  if (/前天|day before yesterday/i.test(cleanText)) {
+    result.setDate(result.getDate() - 2);
+    matched = true;
+  }
+
+  // 匹配 "刚刚" / "just now"
+  if (/刚刚|just now/i.test(cleanText)) {
+    matched = true;
+  }
+
+  return matched ? result.toISOString() : undefined;
+}
+
+/**
+ * 从 DOM HTML 中提取发布日期
+ */
+function extractPublishDateFromDom(html: string): string | undefined {
+  const $ = cheerio.load(html);
+
+  // 1. 尝试从 yt-formatted-string#info 提取（YouTube 视频页面上方信息区）
+  const infoText = $('yt-formatted-string#info').text().trim();
+  if (infoText) {
+    // 提取日期部分，通常是第一个 span 的内容
+    const dateMatch = /(\d{4}年\d{1,2}月\d{1,2}日)/.exec(infoText);    
+    if (dateMatch) {
+      logger.debug(`[extractSingle] Extracted publish date from yt-formatted-string#info: ${dateMatch[1]}`);
+      const parsed = parseChineseDate(dateMatch[1]);
+      logger.debug(`[extractSingle] Extracted publish date from yt-formatted-string#info: ${dateMatch[1]} -> ${parsed}`);
+      if (parsed) return parsed;
+    }
+  }
+
+  // 2. 尝试从 #info-strings yt-formatted-string 提取（频道视频列表页）
+  const infoStrings = $('#info-strings yt-formatted-string').first().text().trim()
+    || $('#info-strings').text().trim();
+  if (infoStrings) {
+    logger.debug(`[extractSingle] Extracted info-strings text: ${infoStrings}`);
+    const parsed = parseChineseDate(infoStrings);
+    logger.debug(`[extractSingle] Extracted publish date from #info-strings: ${infoStrings} -> ${parsed}`);
+    if (parsed) return parsed;
+  }
+
+  // 3. 尝试从 #date 提取
+  const dateEl = $('#date').text().trim()
+    || $('[id="date"]').first().text().trim();
+  if (dateEl) {
+    logger.debug(`[extractSingle] Extracted #date text: ${dateEl}`);
+    const parsed = parseChineseDate(dateEl);
+    logger.debug(`[extractSingle] Extracted publish date from #date: ${dateEl} -> ${parsed}`);
+    if (parsed) return parsed;
+  }
+
+  // 4. 尝试从 meta 标签提取
+  const metaDate = $('meta[itemprop="datePublished"]').attr('content')
+    || $('meta[property="og:video:release_date"]').attr('content');
+  if (metaDate) {
+    logger.debug(`[extractSingle] Extracted meta publish date: ${metaDate}`);
+    const date = new Date(metaDate);
+    if (!isNaN(date.getTime())) {
+      logger.debug(`[extractSingle] Extracted publish date from meta tag: ${metaDate} -> ${date.toISOString()}`);
+      return date.toISOString();
+    }
+  }
+
+  // 5. 尝试从 ytd-watch-info-text 提取
+  const watchInfoText = $('ytd-watch-info-text').text().trim()
+    || $('.ytd-watch-info-text').text().trim();
+  if (watchInfoText) {
+    logger.debug(`[extractSingle] Extracted ytd-watch-info-text: ${watchInfoText}`);
+    const dateMatch = /(\d{4}年\d{1,2}月\d{1,2}日)/.exec(watchInfoText)
+      || /(\d{4}[\/\-]\d{1,2}[\/\-]\d{1,2})/.exec(watchInfoText);
+    if (dateMatch) {
+      const parsed = parseChineseDate(dateMatch[1]);
+      logger.debug(`[extractSingle] Extracted publish date from ytd-watch-info-text: ${dateMatch[1]} -> ${parsed}`);
+      if (parsed) return parsed;
+    }
+  }
+
+  return undefined;
+}
+
+/* ================================================================== */
 /*  工具方法                                                            */
 /* ================================================================== */
 
@@ -431,15 +620,36 @@ function ogMeta(html: string, property: string): string | undefined {
   return $(`meta[property="${property}"]`).attr('content') || undefined;
 }
 
-function extractPublishDate(data: Record<string, unknown> | null): string | undefined {
-  if (!data) return undefined;
-  const dateText = deepFind(data, 'dateText');
-  if (dateText && typeof dateText === 'object') {
-    const st = (dateText as { simpleText?: string }).simpleText;
-    if (st) return st;
+function extractPublishDate(data: Record<string, unknown> | null, html?: string): string | undefined {
+  logger.debug('Extracting publish date...');
+  // 1. 首先尝试从 JSON 数据提取
+  if (data) {
+    const dateText = deepFind(data, 'dateText');
+    logger.debug(`[extractSingle] Extracted dateText from JSON: ${dateText}`);
+    if (dateText && typeof dateText === 'object') {
+      const st = (dateText as { simpleText?: string }).simpleText;
+      logger.debug(`[extractSingle] Extracted simpleText from dateText: ${st}`);
+      if (st) {
+        const parsed = parseChineseDate(st);
+        logger.debug(`[extractSingle] Parsed publish date from dateText: ${st} -> ${parsed}`);
+        if (parsed) return parsed;
+      }
+    }
+    const publishDate = deepFind(data, 'publishDate');
+    if (typeof publishDate === 'string') {
+      const date = new Date(publishDate);
+      if (!isNaN(date.getTime())) {
+        return date.toISOString();
+      }
+    }
   }
-  const publishDate = deepFind(data, 'publishDate');
-  if (typeof publishDate === 'string') return publishDate;
+
+  // 2. 如果 JSON 中没有，尝试从 DOM HTML 提取
+  if (html) {
+    const domDate = extractPublishDateFromDom(html);
+    if (domDate) return domDate;
+  }
+
   return undefined;
 }
 

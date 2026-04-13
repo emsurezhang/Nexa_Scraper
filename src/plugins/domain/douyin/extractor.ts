@@ -11,6 +11,7 @@
 import * as cheerio from 'cheerio';
 import type { ListItem, SingleItem } from '../../../core/plugin-contract.js';
 import { extractVideoId } from './url-matcher.js';
+import { logger } from '../../../core/logger.js';
 
 /* ------------------------------------------------------------------ */
 /*  Types                                                              */
@@ -61,7 +62,17 @@ export async function extractSingle(html: string, url: string): Promise<SingleIt
 
   // 优先从内联 JSON 提取
   const fromJson = extractSingleFromJson(html, videoId);
-  if (fromJson) return fromJson;
+  logger.debug(`[extractSingle] extractSingleFromJson result: ${fromJson ? 'success' : 'null'}, videoId: ${videoId}`);
+  if (fromJson) {
+    logger.debug(`[extractSingle] Extracted from JSON: extract from dom.)}`);
+    // 如果 JSON 提取成功但没有发布时间，尝试从 DOM 补充提取
+    const domPublishedAt = extractPublishedAtFromDom(html);
+    if (domPublishedAt) {
+      fromJson.publishedAt = domPublishedAt;
+    }
+    console.log(`[extractSingle] Extracted publishedAt from DOM: ${domPublishedAt}`);
+    return fromJson;
+  }
 
   // 回退：DOM 提取
   return extractSingleFromDom(html, url, videoId);
@@ -288,6 +299,60 @@ function awemeToSingleItem(aweme: DouyinVideoItem, videoId: string): SingleItem 
   };
 }
 
+/**
+ * 从 DOM 中提取发布时间（用于补充 JSON 提取的缺失）
+ */
+function extractPublishedAtFromDom(html: string): string | undefined {
+  const $ = cheerio.load(html);
+
+  // 调试信息收集
+  const debug: string[] = [];
+
+  // 尝试多种选择器组合来提取发布时间
+  const selectors = [
+    '[data-e2e="detail-video-publish-time"]',
+  ];
+
+  for (const sel of selectors) {
+    const el = $(sel).first();
+    const text = el.text().trim();
+    debug.push(`[extractPublishedAtFromDom] selector: ${sel}, text: "${text}"`);
+    if (text && (/\d+\s*[天小时分钟周月年秒]|\d{4}[-\/]||昨天|前天|刚刚/.test(text) || text.includes('·'))) {
+      debug.push(`[extractPublishedAtFromDom] selector matched time pattern: ${text}`);
+      const parsed = parseRelativeTime(text);
+      debug.push(`[extractPublishedAtFromDom] parseRelativeTime result: ${parsed}`);
+      if (parsed) {
+        logger.debug(debug.join('\n'));
+        return parsed;
+      }
+    }
+  }
+
+  // 尝试从 script 数据中提取
+  const scriptContent = $('script').map((_, el) => $(el).html()).get().join(' ');
+  debug.push(`[extractPublishedAtFromDom] scriptContent length: ${scriptContent.length}`);
+  const timeMatch = scriptContent.match(/"createTime"[:"]\s*(\d{10,13})/)
+    || scriptContent.match(/"create_time"[:"]\s*(\d{10,13})/);
+  debug.push(`[extractPublishedAtFromDom] scriptContent timeMatch: ${timeMatch ? timeMatch[0] : 'null'}`);
+  if (timeMatch) {
+    const timestamp = parseInt(timeMatch[1]);
+    debug.push(`[extractPublishedAtFromDom] timestamp: ${timestamp}`);
+    // 判断是秒还是毫秒
+    const date = timestamp > 1000000000000 
+      ? new Date(timestamp) 
+      : new Date(timestamp * 1000);
+    debug.push(`[extractPublishedAtFromDom] date: ${date.toISOString()}`);
+    if (!isNaN(date.getTime())) {
+      logger.debug(debug.join('\n'));
+      return date.toISOString();
+    }
+  }
+
+  debug.push('[extractPublishedAtFromDom] No publishedAt found');
+  logger.debug(debug.join('\n'));
+  return undefined;
+}
+
 /* ================================================================== */
 /*  DOM 回退提取                                                        */
 /* ================================================================== */
@@ -355,6 +420,9 @@ function extractSingleFromDom(html: string, url: string, videoId: string): Singl
     || $('[data-e2e="video-author-name"]').text().trim()
     || '';
 
+  // 发布时间：从 DOM 提取
+  const publishedAt = extractPublishedAtFromDom(html);
+
   const ogTitle = $('meta[property="og:title"]').attr('content') ?? '';
   const ogDesc = $('meta[property="og:description"]').attr('content') ?? '';
 
@@ -366,11 +434,128 @@ function extractSingleFromDom(html: string, url: string, videoId: string): Singl
     url,
     title,
     content,
+    publishedAt,
     author,
     tags,
     stats: {},
     raw: {},
   };
+}
+
+/* ================================================================== */
+/*  时间解析工具                                                        */
+/* ================================================================== */
+
+/**
+ * 解析相对时间文本为标准 ISO 格式
+ * 支持格式: "1天前", "2小时前", "30分钟前", "1周前", "1个月前" 等
+ */
+function parseRelativeTime(timeText: string, referenceDate: Date = new Date()): string | undefined {
+  if (!timeText) return undefined;
+
+  // 清理文本，移除前缀如 "· "
+  const cleanText = timeText.replace(/^[·\s]+/, '').trim();
+  if (!cleanText) return undefined;
+
+  // 优先解析绝对日期+时间格式 (YYYY-MM-DD HH:mm 或 YYYY/MM/DD HH:mm)
+  const absDateTimeMatch = /(\d{4})[-\/](\d{1,2})[-\/](\d{1,2})[\sT]+(\d{1,2}):(\d{1,2})/.exec(cleanText);
+  if (absDateTimeMatch) {
+    const [, year, month, day, hour, minute] = absDateTimeMatch;
+    // 默认东八区（中国时间）
+    const date = new Date(Date.UTC(
+      parseInt(year),
+      parseInt(month) - 1,
+      parseInt(day),
+      parseInt(hour) - 8, // 转为本地时间
+      parseInt(minute),
+      0,
+      0
+    ));
+    return date.toISOString();
+  }
+
+  // 只日期 (YYYY-MM-DD, YYYY/MM/DD)
+  const absoluteMatch = /(\d{4})[-\/](\d{1,2})[-\/](\d{1,2})/.exec(cleanText);
+  if (absoluteMatch) {
+    const [, year, month, day] = absoluteMatch;
+    // 默认东八区 00:00
+    const date = new Date(Date.UTC(parseInt(year), parseInt(month) - 1, parseInt(day), 0 - 8, 0, 0, 0));
+    return date.toISOString();
+  }
+
+  const result = new Date(referenceDate);
+  let matched = false;
+
+  // 匹配 "X秒前"
+  const secondsMatch = /(\d+)\s*秒前/.exec(cleanText);
+  if (secondsMatch) {
+    result.setSeconds(result.getSeconds() - parseInt(secondsMatch[1]));
+    matched = true;
+  }
+
+  // 匹配 "X分钟前"
+  const minutesMatch = /(\d+)\s*分钟前/.exec(cleanText);
+  if (minutesMatch) {
+    result.setMinutes(result.getMinutes() - parseInt(minutesMatch[1]));
+    matched = true;
+  }
+
+  // 匹配 "X小时前" / "X钟头前"
+  const hoursMatch = /(\d+)\s*小时前|(\d+)\s*钟头前/.exec(cleanText);
+  if (hoursMatch) {
+    const hours = parseInt(hoursMatch[1] || hoursMatch[2]);
+    result.setHours(result.getHours() - hours);
+    matched = true;
+  }
+
+  // 匹配 "X天前" / "X日前"
+  const daysMatch = /(\d+)\s*天前|(\d+)\s*日前/.exec(cleanText);
+  if (daysMatch) {
+    const days = parseInt(daysMatch[1] || daysMatch[2]);
+    result.setDate(result.getDate() - days);
+    matched = true;
+  }
+
+  // 匹配 "X周前" / "X星期前" / "X礼拜前"
+  const weeksMatch = /(\d+)\s*周前|(\d+)\s*星期前|(\d+)\s*礼拜前/.exec(cleanText);
+  if (weeksMatch) {
+    const weeks = parseInt(weeksMatch[1] || weeksMatch[2] || weeksMatch[3]);
+    result.setDate(result.getDate() - weeks * 7);
+    matched = true;
+  }
+
+  // 匹配 "X个月前"
+  const monthsMatch = /(\d+)\s*个月前/.exec(cleanText);
+  if (monthsMatch) {
+    result.setMonth(result.getMonth() - parseInt(monthsMatch[1]));
+    matched = true;
+  }
+
+  // 匹配 "X年前"
+  const yearsMatch = /(\d+)\s*年前/.exec(cleanText);
+  if (yearsMatch) {
+    result.setFullYear(result.getFullYear() - parseInt(yearsMatch[1]));
+    matched = true;
+  }
+
+  // 匹配 "昨天"
+  if (/昨天/.test(cleanText)) {
+    result.setDate(result.getDate() - 1);
+    matched = true;
+  }
+
+  // 匹配 "前天"
+  if (/前天/.test(cleanText)) {
+    result.setDate(result.getDate() - 2);
+    matched = true;
+  }
+
+  // 匹配 "刚刚"
+  if (/刚刚/.test(cleanText)) {
+    matched = true;
+  }
+
+  return matched ? result.toISOString() : undefined;
 }
 
 /* ================================================================== */

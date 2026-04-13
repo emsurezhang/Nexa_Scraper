@@ -240,6 +240,7 @@ async function fetchSingleUrl(
         extractedData = extractedData.slice(0, fetchOptions.limit);
       }
     } else {
+      logger.debug('Extracting single item...');
       extractedData = await plugin.extractSingle(html, url);
     }
 
