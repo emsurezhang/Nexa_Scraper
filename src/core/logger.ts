@@ -30,15 +30,24 @@ export interface LoggerOptions {
   verbosity?: number;
 }
 
-let globalVerbosity = 0;
 
-export function setGlobalVerbosity(verbosity: number): void {
-  globalVerbosity = Math.min(verbosity, 3);
+// 未传递 -V 时为 undefined，只有命令行传递 -V 时才赋值
+let globalVerbosity: number | undefined = undefined;
+
+export function setGlobalVerbosity(verbosity: number | undefined): void {
+  if (typeof verbosity === 'number') {
+    globalVerbosity = Math.min(verbosity, 3);
+  } else {
+    globalVerbosity = undefined;
+  }
 }
 
 export function getLogLevel(): Level {
-  const level = verbosityToLevel[globalVerbosity] || config.logging.level;
-  return level as Level;
+  // 优先使用 config.logging.level，只有命令行传递 -V 时才覆盖
+  if (typeof globalVerbosity === 'number') {
+    return verbosityToLevel[globalVerbosity] || 'info';
+  }
+  return config.logging.level as Level || 'info';
 }
 
 // 创建基础 logger
