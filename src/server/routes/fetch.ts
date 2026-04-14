@@ -100,17 +100,24 @@ export async function registerFetchRoutes(app: FastifyInstance): Promise<void> {
   ) => {
     try {
       const { jobId } = request.params;
+      logger.debug(`Get job status request received: jobId=${jobId}, ip=${request.ip}`);
 
       // 先检查队列中的任务
       const task = taskQueue.getTask(jobId);
       const result = taskQueue.getResult(jobId);
       const error = taskQueue.getError(jobId);
 
+      logger.debug(
+        `Queue lookup for jobId=${jobId}: task=${Boolean(task)}, result=${Boolean(result)}, error=${Boolean(error)}`
+      );
+
       if (task) {
         // 任务仍在队列或处理中
+        const queueStatus = result ? 'completed' : error ? 'failed' : 'running';
+        logger.debug(`Job ${jobId} found in queue with status=${queueStatus}`);
         reply.send({
           jobId,
-          status: result ? 'completed' : error ? 'failed' : 'running',
+          status: queueStatus,
           url: task.url,
           result: result || null,
           error: error ? error.message : null,
@@ -119,15 +126,19 @@ export async function registerFetchRoutes(app: FastifyInstance): Promise<void> {
       }
 
       // 检查数据库中的历史任务
+      logger.debug(`Job ${jobId} not in queue, checking database`);
       const job = jobOperations.get(jobId);
 
       if (!job) {
+        logger.debug(`Job ${jobId} not found in database`);
         reply.status(404).send({
           error: 'Not Found',
           message: 'Job not found',
         });
         return;
       }
+
+      logger.debug(`Job ${jobId} found in database with status=${job.status}`);
 
       reply.send({
         jobId,
